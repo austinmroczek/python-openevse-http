@@ -5,6 +5,7 @@ MIN_AMPS = 6
 MAX_AMPS = 48
 
 ERROR_TIMEOUT = "Timeout while updating"
+DEFAULT_TIMEOUT = 10
 INFO_LOOP_RUNNING = "Event loop already running, not creating new one."
 UPDATE_TRIGGERS = [
     "config_version",

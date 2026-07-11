@@ -7,6 +7,7 @@ from .client import (
     OpenEVSE,
 )
 from .const import (
+    DEFAULT_TIMEOUT,
     ERROR_TIMEOUT,
     INFO_LOOP_RUNNING,
     UPDATE_TRIGGERS,
@@ -33,6 +34,7 @@ from .websocket import (
 )
 
 __all__ = [
+    "DEFAULT_TIMEOUT",
     "ERROR_TIMEOUT",
     "INFO_LOOP_RUNNING",
     "SIGNAL_CONNECTION_STATE",

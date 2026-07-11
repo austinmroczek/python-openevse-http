@@ -17,6 +17,7 @@ from awesomeversion.exceptions import AwesomeVersionCompareException
 
 from .commands import CommandsMixin
 from .const import (
+    DEFAULT_TIMEOUT,
     ERROR_SESSION_LOOP_MISMATCH,
     ERROR_SESSION_REQUIRED,
     ERROR_TIMEOUT,
@@ -55,12 +56,20 @@ class OpenEVSE(CommandsMixin, ManagersMixin, SensorsMixin, PropertiesMixin):
         session: aiohttp.ClientSession | None = None,
         ssl: bool = False,
         ssl_verify: bool = True,
+        timeout: float | None = DEFAULT_TIMEOUT,
     ) -> None:
-        """Connect to an OpenEVSE charger equipped with wifi or ethernet."""
+        """Connect to an OpenEVSE charger equipped with wifi or ethernet.
+
+        timeout sets the total per-request timeout (in seconds) applied to
+        every HTTP call, regardless of the timeout configured on the
+        supplied session. Pass None to defer entirely to the session's own
+        timeout configuration.
+        """
         self._user = user or ""
         self._pwd = pwd or ""
         self.ssl = ssl
         self.ssl_verify = ssl_verify
+        self.timeout = timeout
         scheme = "https" if ssl else "http"
         self.url = f"{scheme}://{host}/"
         self._status: dict[str, Any] = {}
@@ -136,11 +145,13 @@ class OpenEVSE(CommandsMixin, ManagersMixin, SensorsMixin, PropertiesMixin):
             method,
         )
         try:
-            kwargs = {"data": rapi, "auth": auth}
+            kwargs: dict[str, Any] = {"data": rapi, "auth": auth}
             if data is not None:
                 kwargs["json"] = data
             if url.startswith("https://") and not self.ssl_verify:
                 kwargs["ssl"] = False
+            if self.timeout is not None:
+                kwargs["timeout"] = aiohttp.ClientTimeout(total=self.timeout)
             async with http_method(url, **kwargs) as resp:
                 try:
                     raw = await resp.text()

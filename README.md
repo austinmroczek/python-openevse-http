@@ -81,6 +81,21 @@ To bypass certificate verification:
         )
 ```
 
+### Request Timeouts
+
+Every HTTP request is given a default total timeout of 10 seconds, regardless of the timeout configured on the `aiohttp.ClientSession` you supply. This ensures calls to unresponsive local devices fail fast instead of hanging on whatever default (or lack thereof) the session was created with. You can override it with the `timeout` parameter (in seconds):
+
+```python
+        # Allow more time for slow connections (e.g. weak wifi)
+        charger = OpenEVSE(
+            "192.168.1.30",
+            session=session,
+            timeout=30,
+        )
+```
+
+Pass `timeout=None` to disable the library's per-request timeout entirely and defer to the session's own configuration.
+
 ## API Support Matrix
 
 | Endpoint | Methods | Supported | Description |
