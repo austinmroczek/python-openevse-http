@@ -5,15 +5,21 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping
+from contextlib import AbstractAsyncContextManager
 from typing import Any
 
 import aiohttp
-from aiohttp.client_exceptions import ContentTypeError, ServerTimeoutError
+from aiohttp.client_exceptions import ContentTypeError
 from awesomeversion import AwesomeVersion
 from awesomeversion.exceptions import AwesomeVersionCompareException
 
 from .const import MAX_AMPS, MIN_AMPS, RAPI_ERRORS, SUCCESS_ANSWERS, divert_mode
-from .exceptions import UnknownError, UnsupportedFeature
+from .exceptions import (
+    OpenEVSEConnectionError,
+    OpenEVSETimeoutError,
+    UnknownError,
+    UnsupportedFeature,
+)
 from .utils import get_awesome_version
 
 _LOGGER = logging.getLogger(__name__)
@@ -25,6 +31,7 @@ class CommandsMixin:
     url: str
     ssl: bool
     ssl_verify: bool
+    timeout: float | None
     _status: dict[str, Any]
     _config: dict[str, Any]
     _session: aiohttp.ClientSession | None
@@ -50,6 +57,14 @@ class CommandsMixin:
 
     def _get_session(self) -> aiohttp.ClientSession:
         """Return the configured HTTP session."""
+        raise NotImplementedError
+
+    def _wrap_client_errors(self, url: str) -> AbstractAsyncContextManager[None]:
+        """Translate aiohttp/timeout exceptions into typed OpenEVSE exceptions."""
+        raise NotImplementedError
+
+    def _request_timeout(self) -> aiohttp.ClientTimeout | None:
+        """Return the configured aiohttp.ClientTimeout, if any."""
         raise NotImplementedError
 
     def _flag_ota_if_started(self, response: Any) -> None:
@@ -417,12 +432,12 @@ class CommandsMixin:
         try:
             session = self._get_session()
             return await self._firmware_check_with_session(session, url, method)
-        except (TimeoutError, ServerTimeoutError):
-            _LOGGER.error("%s: %s", "Timeout while updating", url)
+        except (OpenEVSETimeoutError, OpenEVSEConnectionError):
+            # Already logged by _wrap_client_errors; firmware_check is a
+            # best-effort check so failures are swallowed rather than raised.
+            pass
         except ContentTypeError as err:
             _LOGGER.error("%s", err)
-        except aiohttp.ClientConnectorError as err:
-            _LOGGER.error("%s : %s", err, url)
 
         return None
 
@@ -436,7 +451,14 @@ class CommandsMixin:
             url,
             method,
         )
-        async with http_method(url) as resp:
+        kwargs: dict[str, Any] = {}
+        request_timeout = self._request_timeout()
+        if request_timeout is not None:
+            kwargs["timeout"] = request_timeout
+        async with (
+            self._wrap_client_errors(url),
+            http_method(url, **kwargs) as resp,
+        ):
             _LOGGER.debug("Firmware check response status: %d", resp.status)
             if resp.status != 200:
                 return None

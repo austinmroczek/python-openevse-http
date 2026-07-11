@@ -379,8 +379,8 @@ async def test_firmware_check(
     with caplog.at_level(logging.DEBUG):
         firmware = await test_charger.firmware_check()
         assert (
-            f"Cannot connect to host localhost:80 ssl:None [None] : {TEST_URL_GITHUB_v4}"
-            in caplog.text
+            f"Connection error: {TEST_URL_GITHUB_v4}: "
+            "Cannot connect to host localhost:80 ssl:None [None]" in caplog.text
         )
     assert firmware is None
 

@@ -7,7 +7,8 @@ import inspect
 import json
 import logging
 import threading
-from collections.abc import Callable, Mapping, MutableMapping
+from collections.abc import AsyncIterator, Callable, Mapping, MutableMapping
+from contextlib import asynccontextmanager
 from typing import Any
 
 import aiohttp
@@ -117,6 +118,29 @@ class OpenEVSE(CommandsMixin, ManagersMixin, SensorsMixin, PropertiesMixin):
         self._validate_session_loop(loop)
         return self._session
 
+    @asynccontextmanager
+    async def _wrap_client_errors(self, url: str) -> AsyncIterator[None]:
+        """Translate aiohttp/timeout exceptions into typed OpenEVSE exceptions.
+
+        Shared by every request path (charger API calls and the GitHub
+        firmware-check call) so timeouts and connection failures are
+        reported consistently regardless of which path hit them.
+        """
+        try:
+            yield
+        except (TimeoutError, ServerTimeoutError) as err:
+            _LOGGER.error("%s: %s", ERROR_TIMEOUT, url)
+            raise OpenEVSETimeoutError(f"{ERROR_TIMEOUT}: {url}") from err
+        except (ClientConnectorError, ClientOSError, ClientPayloadError) as err:
+            _LOGGER.error("Connection error: %s: %s", url, err)
+            raise OpenEVSEConnectionError(f"Connection error: {url}: {err}") from err
+
+    def _request_timeout(self) -> aiohttp.ClientTimeout | None:
+        """Return the configured aiohttp.ClientTimeout, if any."""
+        if self.timeout is None:
+            return None
+        return aiohttp.ClientTimeout(total=self.timeout)
+
     async def process_request(
         self,
         url: str,
@@ -190,9 +214,13 @@ class OpenEVSE(CommandsMixin, ManagersMixin, SensorsMixin, PropertiesMixin):
                 kwargs["json"] = data
             if url.startswith("https://") and not self.ssl_verify:
                 kwargs["ssl"] = False
-            if self.timeout is not None:
-                kwargs["timeout"] = aiohttp.ClientTimeout(total=self.timeout)
-            async with http_method(url, **kwargs) as resp:
+            request_timeout = self._request_timeout()
+            if request_timeout is not None:
+                kwargs["timeout"] = request_timeout
+            async with (
+                self._wrap_client_errors(url),
+                http_method(url, **kwargs) as resp,
+            ):
                 try:
                     raw = await resp.text()
                 except UnicodeDecodeError:
@@ -240,12 +268,6 @@ class OpenEVSE(CommandsMixin, ManagersMixin, SensorsMixin, PropertiesMixin):
                     await self.update()
                 return response_content
 
-        except (TimeoutError, ServerTimeoutError) as err:
-            _LOGGER.error("%s: %s", ERROR_TIMEOUT, url)
-            raise OpenEVSETimeoutError(f"{ERROR_TIMEOUT}: {url}") from err
-        except (ClientConnectorError, ClientOSError, ClientPayloadError) as err:
-            _LOGGER.error("Connection error: %s: %s", url, err)
-            raise OpenEVSEConnectionError(f"Connection error: {url}: {err}") from err
         except ContentTypeError as err:
             _LOGGER.error("Content error: %s", err.message)
             raise
