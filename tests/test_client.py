@@ -1234,6 +1234,60 @@ async def test_process_request_os_error(charger_factory):
         assert isinstance(exc_info.value.__cause__, aiohttp.ClientOSError)
 
 
+async def test_process_request_retries_then_succeeds(charger_factory, caplog):
+    """Test process_request retries transient errors and eventually succeeds."""
+    mock_resp = MagicMock()
+    mock_resp.text = AsyncMock(return_value='{"msg": "ok"}')
+    mock_resp.status = 200
+    mock_resp.__aenter__.return_value = mock_resp
+    mock_resp.__aexit__.return_value = None
+
+    with patch("aiohttp.ClientSession.get") as mock_get:
+        mock_get.side_effect = [
+            TimeoutError("Connection timeout"),
+            aiohttp.ClientOSError("Network unreachable"),
+            mock_resp,
+        ]
+
+        charger = charger_factory(SERVER_URL, retries=2, retry_backoff=0.001)
+
+        with caplog.at_level(logging.WARNING):
+            result = await charger.process_request(TEST_URL_STATUS, method="get")
+
+        assert result == {"msg": "ok"}
+        assert mock_get.call_count == 3
+        assert caplog.text.count("retrying in") == 2
+
+
+async def test_process_request_retries_exhausted(charger_factory, caplog):
+    """Test process_request gives up once configured retries are exhausted."""
+    with patch("aiohttp.ClientSession.get") as mock_get:
+        mock_get.side_effect = TimeoutError("Connection timeout")
+
+        charger = charger_factory(SERVER_URL, retries=2, retry_backoff=0.001)
+
+        with caplog.at_level(logging.WARNING):
+            with pytest.raises(main.OpenEVSETimeoutError):
+                await charger.process_request(TEST_URL_STATUS, method="get")
+
+        assert mock_get.call_count == 3  # initial attempt + 2 retries
+        assert caplog.text.count("retrying in") == 2
+
+
+async def test_process_request_no_retry_by_default(charger_factory):
+    """Test process_request does not retry unless explicitly configured."""
+    with patch("aiohttp.ClientSession.get") as mock_get:
+        mock_get.side_effect = TimeoutError("Connection timeout")
+
+        charger = charger_factory(SERVER_URL)
+        assert charger.retries == 0
+
+        with pytest.raises(main.OpenEVSETimeoutError):
+            await charger.process_request(TEST_URL_STATUS, method="get")
+
+        assert mock_get.call_count == 1
+
+
 async def test_process_request_content_type_error(charger_factory):
     """Test process_request handles ContentTypeError."""
     with patch("aiohttp.ClientSession.get") as mock_get:

@@ -6,6 +6,9 @@ MAX_AMPS = 48
 
 ERROR_TIMEOUT = "Timeout while updating"
 DEFAULT_TIMEOUT = 10
+DEFAULT_RETRIES = 0
+DEFAULT_RETRY_BACKOFF = 1.0
+MAX_RETRY_BACKOFF = 30.0
 INFO_LOOP_RUNNING = "Event loop already running, not creating new one."
 UPDATE_TRIGGERS = [
     "config_version",

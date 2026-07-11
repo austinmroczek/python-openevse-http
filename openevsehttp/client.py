@@ -23,10 +23,13 @@ from awesomeversion.exceptions import AwesomeVersionCompareException
 
 from .commands import CommandsMixin
 from .const import (
+    DEFAULT_RETRIES,
+    DEFAULT_RETRY_BACKOFF,
     DEFAULT_TIMEOUT,
     ERROR_SESSION_LOOP_MISMATCH,
     ERROR_SESSION_REQUIRED,
     ERROR_TIMEOUT,
+    MAX_RETRY_BACKOFF,
     UPDATE_TRIGGERS,
 )
 from .exceptions import (
@@ -65,6 +68,8 @@ class OpenEVSE(CommandsMixin, ManagersMixin, SensorsMixin, PropertiesMixin):
         ssl: bool = False,
         ssl_verify: bool = True,
         timeout: float | None = DEFAULT_TIMEOUT,
+        retries: int = DEFAULT_RETRIES,
+        retry_backoff: float = DEFAULT_RETRY_BACKOFF,
     ) -> None:
         """Connect to an OpenEVSE charger equipped with wifi or ethernet.
 
@@ -72,12 +77,20 @@ class OpenEVSE(CommandsMixin, ManagersMixin, SensorsMixin, PropertiesMixin):
         every HTTP call, regardless of the timeout configured on the
         supplied session. Pass None to defer entirely to the session's own
         timeout configuration.
+
+        retries sets how many additional attempts are made after a request
+        fails with a timeout or connection error, using capped exponential
+        backoff starting at retry_backoff seconds. Defaults to 0 (no
+        retries) so existing callers that already implement their own retry
+        logic see no behavior change unless they opt in.
         """
         self._user = user or ""
         self._pwd = pwd or ""
         self.ssl = ssl
         self.ssl_verify = ssl_verify
         self.timeout = timeout
+        self.retries = retries
+        self.retry_backoff = retry_backoff
         scheme = "https" if ssl else "http"
         self.url = f"{scheme}://{host}/"
         self._status: dict[str, Any] = {}
@@ -121,9 +134,28 @@ class OpenEVSE(CommandsMixin, ManagersMixin, SensorsMixin, PropertiesMixin):
             auth = aiohttp.BasicAuth(self._user, self._pwd)
 
         session = self._get_session()
-        return await self._process_request_with_session(
-            session, url, method, data, rapi, auth
-        )
+
+        attempt = 0
+        while True:
+            try:
+                return await self._process_request_with_session(
+                    session, url, method, data, rapi, auth
+                )
+            except OpenEVSEConnectionError:
+                attempt += 1
+                if attempt > self.retries:
+                    raise
+                delay = min(
+                    self.retry_backoff * (2 ** (attempt - 1)), MAX_RETRY_BACKOFF
+                )
+                _LOGGER.warning(
+                    "Request to %s failed (attempt %d/%d), retrying in %.1fs",
+                    url,
+                    attempt,
+                    self.retries,
+                    delay,
+                )
+                await asyncio.sleep(delay)
 
     def _normalize_response(self, response: Any) -> dict[str, Any] | list[Any]:
         """Normalize response to a dict or list."""
