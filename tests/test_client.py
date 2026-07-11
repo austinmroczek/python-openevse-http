@@ -300,8 +300,9 @@ async def test_send_command_server_timeout(test_charger_auth, mock_aioclient, ca
         exception=ServerTimeoutError,
     )
     with caplog.at_level(logging.DEBUG):
-        with pytest.raises(main.ServerTimeoutError):
+        with pytest.raises(main.OpenEVSETimeoutError) as exc_info:
             await test_charger_auth.send_command("test")
+        assert isinstance(exc_info.value.__cause__, ServerTimeoutError)
     assert f"{main.ERROR_TIMEOUT}: {TEST_URL_RAPI}" in caplog.text
 
 
@@ -1199,8 +1200,38 @@ async def test_process_request_server_timeout_error(charger_factory):
 
         charger = charger_factory(SERVER_URL)
 
-        with pytest.raises(ServerTimeoutError):
+        with pytest.raises(main.OpenEVSETimeoutError) as exc_info:
             await charger.process_request(TEST_URL_STATUS, method="get")
+        assert isinstance(exc_info.value.__cause__, ServerTimeoutError)
+
+
+async def test_process_request_connector_error(charger_factory, caplog):
+    """Test process_request handles ClientConnectorError."""
+    with patch("aiohttp.ClientSession.get") as mock_get:
+        mock_get.side_effect = aiohttp.ClientConnectorError(
+            ConnectionKey("localhost", 80, False, None, None, None, None),
+            OSError(ConnectionError),
+        )
+
+        charger = charger_factory(SERVER_URL)
+
+        with caplog.at_level(logging.DEBUG):
+            with pytest.raises(main.OpenEVSEConnectionError) as exc_info:
+                await charger.process_request(TEST_URL_STATUS, method="get")
+            assert isinstance(exc_info.value.__cause__, aiohttp.ClientConnectorError)
+        assert f"Connection error: {TEST_URL_STATUS}" in caplog.text
+
+
+async def test_process_request_os_error(charger_factory):
+    """Test process_request handles ClientOSError."""
+    with patch("aiohttp.ClientSession.get") as mock_get:
+        mock_get.side_effect = aiohttp.ClientOSError("Network unreachable")
+
+        charger = charger_factory(SERVER_URL)
+
+        with pytest.raises(main.OpenEVSEConnectionError) as exc_info:
+            await charger.process_request(TEST_URL_STATUS, method="get")
+        assert isinstance(exc_info.value.__cause__, aiohttp.ClientOSError)
 
 
 async def test_process_request_content_type_error(charger_factory):
@@ -1544,8 +1575,9 @@ async def test_external_session_server_timeout_error():
         async with aiohttp.ClientSession() as session:
             charger = OpenEVSE(SERVER_URL, session=session)
 
-            with pytest.raises(ServerTimeoutError):
+            with pytest.raises(main.OpenEVSETimeoutError) as exc_info:
                 await charger.process_request(TEST_URL_STATUS, method="get")
+            assert isinstance(exc_info.value.__cause__, ServerTimeoutError)
 
 
 async def test_external_session_content_type_error():

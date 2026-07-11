@@ -11,7 +11,13 @@ from collections.abc import Callable, Mapping, MutableMapping
 from typing import Any
 
 import aiohttp
-from aiohttp.client_exceptions import ContentTypeError, ServerTimeoutError
+from aiohttp.client_exceptions import (
+    ClientConnectorError,
+    ClientOSError,
+    ClientPayloadError,
+    ContentTypeError,
+    ServerTimeoutError,
+)
 from awesomeversion import AwesomeVersion
 from awesomeversion.exceptions import AwesomeVersionCompareException
 
@@ -28,6 +34,8 @@ from .exceptions import (
     AuthenticationError,
     MissingMethod,
     MissingSerial,
+    OpenEVSEConnectionError,
+    OpenEVSETimeoutError,
     ParseJSONError,
 )
 from .managers import ManagersMixin
@@ -200,9 +208,12 @@ class OpenEVSE(CommandsMixin, ManagersMixin, SensorsMixin, PropertiesMixin):
                     await self.update()
                 return response_content
 
-        except (TimeoutError, ServerTimeoutError):
+        except (TimeoutError, ServerTimeoutError) as err:
             _LOGGER.error("%s: %s", ERROR_TIMEOUT, url)
-            raise
+            raise OpenEVSETimeoutError(f"{ERROR_TIMEOUT}: {url}") from err
+        except (ClientConnectorError, ClientOSError, ClientPayloadError) as err:
+            _LOGGER.error("Connection error: %s: %s", url, err)
+            raise OpenEVSEConnectionError(f"Connection error: {url}: {err}") from err
         except ContentTypeError as err:
             _LOGGER.error("Content error: %s", err.message)
             raise
